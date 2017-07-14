@@ -3016,7 +3016,7 @@ function hasOwnProperty(obj, prop) {
 global.curlconverter = require('curlconverter')
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"curlconverter":24}],16:[function(require,module,exports){
+},{"curlconverter":25}],16:[function(require,module,exports){
 'use strict';
 module.exports = function () {
 	return /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]/g;
@@ -3398,7 +3398,7 @@ module.exports = function (opts) {
   })
 }
 
-},{"string-width":34,"strip-ansi":36,"wrap-ansi":38}],19:[function(require,module,exports){
+},{"string-width":35,"strip-ansi":37,"wrap-ansi":39}],19:[function(require,module,exports){
 /* eslint-disable babel/new-cap, xo/throw-new-error */
 'use strict';
 module.exports = function (str, pos) {
@@ -3665,7 +3665,7 @@ var toNode = function (curlCommand) {
 
 module.exports = toNode
 
-},{"../util":25,"jsesc":29}],22:[function(require,module,exports){
+},{"../util":26,"jsesc":30}],22:[function(require,module,exports){
 var util = require('../util')
 var querystring = require('querystring')
 
@@ -3749,7 +3749,7 @@ var toPhp = function (curlCommand) {
 
 module.exports = toPhp
 
-},{"../util":25,"querystring":8}],23:[function(require,module,exports){
+},{"../util":26,"querystring":8}],23:[function(require,module,exports){
 var util = require('../util')
 var jsesc = require('jsesc')
 var querystring = require('querystring')
@@ -3955,20 +3955,229 @@ var toPython = function (curlCommand) {
 
 module.exports = toPython
 
-},{"../util":25,"jsesc":29,"querystring":8,"string.prototype.startswith":35}],24:[function(require,module,exports){
+},{"../util":26,"jsesc":30,"querystring":8,"string.prototype.startswith":36}],24:[function(require,module,exports){
+var util = require('../util')
+var jsesc = require('jsesc')
+var querystring = require('querystring')
+
+require('string.prototype.startswith')
+
+function repr (value) {
+  // In context of url parameters, don't accept nulls and such.
+  if (!value) {
+    return "''"
+  } else {
+    return "'" + jsesc(value, { quotes: 'single' }) + "'"
+  }
+}
+
+function getQueryDict (request) {
+  var queryDict = 'params = (\n'
+  for (var paramName in request.query) {
+    var rawValue = request.query[paramName]
+    var paramValue
+    if (Array.isArray(rawValue)) {
+      paramValue = '[' + rawValue.map(repr).join(', ') + ']'
+    } else {
+      paramValue = repr(rawValue)
+    }
+    queryDict += '    (' + repr(paramName) + ', ' + paramValue + '),\n'
+  }
+  queryDict += ')\n'
+  return queryDict
+}
+
+function getDataString (request) {
+  if (request.data.startsWith('@')) {
+    var filePath = request.data.slice(1)
+    if (request.isDataBinary) {
+      return 'data = open(\'' + filePath + '\', \'rb\').read()'
+    } else {
+      return 'data = open(\'' + filePath + '\')'
+    }
+  }
+
+  var parsedQueryString = querystring.parse(request.data)
+  var keyCount = Object.keys(parsedQueryString).length
+  var singleKeyOnly = keyCount === 1 && !parsedQueryString[Object.keys(parsedQueryString)[0]]
+  var singularData = request.isDataBinary || singleKeyOnly
+  if (singularData) {
+    return 'data = ' + repr(request.data) + '\n'
+  } else {
+    return getMultipleDataString(request, parsedQueryString)
+  }
+}
+
+function getMultipleDataString (request, parsedQueryString) {
+  var repeatedKey = false
+  for (var key in parsedQueryString) {
+    var value = parsedQueryString[key]
+    if (Array.isArray(value)) {
+      repeatedKey = true
+    }
+  }
+
+  var dataString
+  if (repeatedKey) {
+    dataString = 'data = [\n'
+    for (key in parsedQueryString) {
+      value = parsedQueryString[key]
+      if (Array.isArray(value)) {
+        for (var i = 0; i < value.length; i++) {
+          dataString += '  (' + repr(key) + ', ' + repr(value[i]) + '),\n'
+        }
+      } else {
+        dataString += '  (' + repr(key) + ', ' + repr(value) + '),\n'
+      }
+    }
+    dataString += ']\n'
+  } else {
+    dataString = 'data = [\n'
+    for (key in parsedQueryString) {
+      value = parsedQueryString[key]
+      dataString += '  (' + repr(key) + ', ' + repr(value) + '),\n'
+    }
+    dataString += ']\n'
+  }
+
+  return dataString
+}
+
+function getFilesString (request) {
+  // http://docs.python-requests.org/en/master/user/quickstart/#post-a-multipart-encoded-file
+  var filesString = 'files = [\n'
+  for (var multipartKey in request.multipartUploads) {
+    var multipartValue = request.multipartUploads[multipartKey]
+    if (multipartValue.startsWith('@')) {
+      filesString += '    (' + repr(multipartKey) + ', open(' + repr(multipartValue.slice(1)) + ", 'rb')),\n"
+    } else {
+      filesString += '    (' + repr(multipartKey) + ', ' + repr(multipartValue) + '),\n'
+    }
+  }
+  filesString += ']\n'
+
+  return filesString
+}
+
+var toR = function (curlCommand) {
+  var request = util.parseCurlCommand(curlCommand)
+  // var cookieDict
+  // if (request.cookies) {
+  //   cookieDict = 'cookies = {\n'
+  //   for (var cookieName in request.cookies) {
+  //     cookieDict += '    ' + repr(cookieName) + ': ' + repr(request.cookies[cookieName]) + ',\n'
+  //   }
+  //   cookieDict += '}\n'
+  // }
+  // var headerDict
+  // if (request.headers) {
+  //   headerDict = 'headers = {\n'
+  //   for (var headerName in request.headers) {
+  //     headerDict += '    ' + repr(headerName) + ': ' + repr(request.headers[headerName]) + ',\n'
+  //   }
+  //   headerDict += '}\n'
+  // }
+  //
+  // var queryDict
+  // if (request.query) {
+  //   queryDict = getQueryDict(request)
+  // }
+  //
+  // var dataString
+  // var filesString
+  // if (typeof request.data === 'string') {
+  //   dataString = getDataString(request)
+  // } else if (request.multipartUploads) {
+  //   filesString = getFilesString(request)
+  // }
+  // // curl automatically prepends 'http' if the scheme is missing, but python fails and returns an error
+  // // we tack it on here to mimic curl
+  // if (request.url.indexOf('http') !== 0) {
+  //   request.url = 'http://' + request.url
+  // }
+  // if (request.urlWithoutQuery.indexOf('http') !== 0) {
+  //   request.urlWithoutQuery = 'http://' + request.urlWithoutQuery
+  // }
+  // var requestLineWithUrlParams = 'requests.' + request.method + '(\'' + request.urlWithoutQuery + '\''
+  // var requestLineWithOriginalUrl = 'requests.' + request.method + '(\'' + request.url + '\''
+  //
+  // var requestLineBody = ''
+  // if (request.headers) {
+  //   requestLineBody += ', headers=headers'
+  // }
+  // if (request.query) {
+  //   requestLineBody += ', params=params'
+  // }
+  // if (request.cookies) {
+  //   requestLineBody += ', cookies=cookies'
+  // }
+  // if (typeof request.data === 'string') {
+  //   requestLineBody += ', data=data'
+  // } else if (request.multipartUploads) {
+  //   requestLineBody += ', files=files'
+  // }
+  // if (request.insecure) {
+  //   requestLineBody += ', verify=False'
+  // }
+  // if (request.auth) {
+  //   var splitAuth = request.auth.split(':')
+  //   var user = splitAuth[0] || ''
+  //   var password = splitAuth[1] || ''
+  //   requestLineBody += ', auth=(' + repr(user) + ', ' + repr(password) + ')'
+  // }
+  // requestLineBody += ')'
+  //
+  // requestLineWithOriginalUrl += requestLineBody.replace(', params=params', '')
+  // requestLineWithUrlParams += requestLineBody
+  //
+  // var pythonCode = ''
+  // pythonCode += 'import requests\n\n'
+  // if (cookieDict) {
+  //   pythonCode += cookieDict + '\n'
+  // }
+  // if (headerDict) {
+  //   pythonCode += headerDict + '\n'
+  // }
+  // if (queryDict) {
+  //   pythonCode += queryDict + '\n'
+  // }
+  // if (dataString) {
+  //   pythonCode += dataString + '\n'
+  // } else if (filesString) {
+  //   pythonCode += filesString + '\n'
+  // }
+  // pythonCode += requestLineWithUrlParams
+  //
+  // if (request.query) {
+  //   pythonCode += '\n\n' +
+  //           '#NB. Original query string below. It seems impossible to parse and\n' +
+  //           '#reproduce query strings 100% accurately so the one below is given\n' +
+  //           '#in case the reproduced version is not "correct".\n'
+  //   pythonCode += '# ' + requestLineWithOriginalUrl
+  // }
+
+  // return pythonCode + '\n'
+  return request
+}
+
+module.exports = toR
+
+},{"../util":26,"jsesc":30,"querystring":8,"string.prototype.startswith":36}],25:[function(require,module,exports){
 'use strict'
 
 var toPython = require('./generators/python.js')
 var toNode = require('./generators/node.js')
 var toPhp = require('./generators/php.js')
+var toR = require('./generators/r.js');
 
 module.exports = {
   toPhp: toPhp,
   toPython: toPython,
-  toNode: toNode
+  toNode: toNode,
+  toR: toR
 }
 
-},{"./generators/node.js":21,"./generators/php.js":22,"./generators/python.js":23}],25:[function(require,module,exports){
+},{"./generators/node.js":21,"./generators/php.js":22,"./generators/python.js":23,"./generators/r.js":24}],26:[function(require,module,exports){
 var cookie = require('cookie')
 var yargs = require('yargs')
 var URL = require('url')
@@ -4148,7 +4357,7 @@ module.exports = {
   serializeCookies: serializeCookies
 }
 
-},{"cookie":20,"querystring":8,"url":10,"yargs":40}],26:[function(require,module,exports){
+},{"cookie":20,"querystring":8,"url":10,"yargs":41}],27:[function(require,module,exports){
 'use strict';
 module.exports = function (str, sep) {
 	if (typeof str !== 'string') {
@@ -4163,7 +4372,7 @@ module.exports = function (str, sep) {
 		.toLowerCase();
 };
 
-},{}],27:[function(require,module,exports){
+},{}],28:[function(require,module,exports){
 'use strict';
 module.exports = function (obj) {
 	if (typeof obj !== 'object') {
@@ -4180,7 +4389,7 @@ module.exports = function (obj) {
 	return ret;
 };
 
-},{}],28:[function(require,module,exports){
+},{}],29:[function(require,module,exports){
 'use strict';
 var numberIsNan = require('number-is-nan');
 
@@ -4228,7 +4437,7 @@ module.exports = function (x) {
 	return false;
 }
 
-},{"number-is-nan":32}],29:[function(require,module,exports){
+},{"number-is-nan":33}],30:[function(require,module,exports){
 (function (global){
 /*! http://mths.be/jsesc v0.5.0 by @mathias */
 ;(function(root) {
@@ -4497,7 +4706,7 @@ module.exports = function (x) {
 }(this));
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],30:[function(require,module,exports){
+},{}],31:[function(require,module,exports){
 'use strict';
 var invertKv = require('invert-kv');
 var all = require('./lcid.json');
@@ -4521,7 +4730,7 @@ exports.to = function (localeId) {
 
 exports.all = all;
 
-},{"./lcid.json":31,"invert-kv":27}],31:[function(require,module,exports){
+},{"./lcid.json":32,"invert-kv":28}],32:[function(require,module,exports){
 module.exports={
 	"af_ZA": 1078,
 	"am_ET": 1118,
@@ -4726,13 +4935,13 @@ module.exports={
 	"zu_ZA": 1077
 }
 
-},{}],32:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 'use strict';
 module.exports = Number.isNaN || function (x) {
 	return x !== x;
 };
 
-},{}],33:[function(require,module,exports){
+},{}],34:[function(require,module,exports){
 (function (process){
 'use strict';
 var childProcess = require('child_process');
@@ -4863,7 +5072,7 @@ module.exports.sync = function (opts) {
 };
 
 }).call(this,require('_process'))
-},{"_process":4,"child_process":1,"lcid":30}],34:[function(require,module,exports){
+},{"_process":4,"child_process":1,"lcid":31}],35:[function(require,module,exports){
 'use strict';
 var stripAnsi = require('strip-ansi');
 var codePointAt = require('code-point-at');
@@ -4902,7 +5111,7 @@ module.exports = function (str) {
 	return width;
 };
 
-},{"code-point-at":19,"is-fullwidth-code-point":28,"strip-ansi":36}],35:[function(require,module,exports){
+},{"code-point-at":19,"is-fullwidth-code-point":29,"strip-ansi":37}],36:[function(require,module,exports){
 /*! http://mths.be/startswith v0.2.0 by @mathias */
 if (!String.prototype.startsWith) {
 	(function() {
@@ -4959,7 +5168,7 @@ if (!String.prototype.startsWith) {
 	}());
 }
 
-},{}],36:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 'use strict';
 var ansiRegex = require('ansi-regex')();
 
@@ -4967,7 +5176,7 @@ module.exports = function (str) {
 	return typeof str === 'string' ? str.replace(ansiRegex, '') : str;
 };
 
-},{"ansi-regex":16}],37:[function(require,module,exports){
+},{"ansi-regex":16}],38:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -5003,7 +5212,7 @@ module.exports = (function () {
 })();
 
 }).call(this,require('_process'))
-},{"_process":4,"tty":9}],38:[function(require,module,exports){
+},{"_process":4,"tty":9}],39:[function(require,module,exports){
 'use strict';
 var stringWidth = require('string-width');
 var stripAnsi = require('strip-ansi');
@@ -5173,7 +5382,7 @@ module.exports = function (str, cols, opts) {
 	}).join('\n');
 };
 
-},{"string-width":34,"strip-ansi":36}],39:[function(require,module,exports){
+},{"string-width":35,"strip-ansi":37}],40:[function(require,module,exports){
 var fs = require('fs')
 var path = require('path')
 var util = require('util')
@@ -5347,7 +5556,7 @@ module.exports = function (opts) {
   return y18n
 }
 
-},{"fs":1,"path":3,"util":14}],40:[function(require,module,exports){
+},{"fs":1,"path":3,"util":14}],41:[function(require,module,exports){
 (function (process,__dirname){
 var assert = require('assert')
 var Completion = require('./lib/completion')
@@ -6016,7 +6225,7 @@ function singletonify (inst) {
 }
 
 }).call(this,require('_process'),"/node_modules\\yargs")
-},{"./lib/completion":41,"./lib/parser":42,"./lib/tokenize-arg-string":43,"./lib/usage":44,"./lib/validation":45,"_process":4,"assert":2,"os-locale":33,"path":3,"window-size":37,"y18n":39}],41:[function(require,module,exports){
+},{"./lib/completion":42,"./lib/parser":43,"./lib/tokenize-arg-string":44,"./lib/usage":45,"./lib/validation":46,"_process":4,"assert":2,"os-locale":34,"path":3,"window-size":38,"y18n":40}],42:[function(require,module,exports){
 (function (process,__dirname){
 var fs = require('fs')
 var path = require('path')
@@ -6111,7 +6320,7 @@ module.exports = function (yargs, usage) {
 }
 
 }).call(this,require('_process'),"/node_modules\\yargs\\lib")
-},{"_process":4,"fs":1,"path":3}],42:[function(require,module,exports){
+},{"_process":4,"fs":1,"path":3}],43:[function(require,module,exports){
 (function (process){
 // fancy-pants parsing of argv, originally forked
 // from minimist: https://www.npmjs.com/package/minimist
@@ -6638,7 +6847,7 @@ module.exports = function (args, opts, y18n) {
 }
 
 }).call(this,require('_process'))
-},{"_process":4,"camelcase":17,"path":3}],43:[function(require,module,exports){
+},{"_process":4,"camelcase":17,"path":3}],44:[function(require,module,exports){
 // take an un-split argv string and tokenize it.
 module.exports = function (argString) {
   var i = 0
@@ -6688,7 +6897,7 @@ module.exports = function (argString) {
   return args
 }
 
-},{}],44:[function(require,module,exports){
+},{}],45:[function(require,module,exports){
 (function (process){
 // this file handles outputting usage instructions,
 // failures, etc. keeps logging in one place.
@@ -7075,7 +7284,7 @@ module.exports = function (yargs, y18n) {
 }
 
 }).call(this,require('_process'))
-},{"_process":4,"cliui":18,"decamelize":26,"string-width":34,"window-size":37}],45:[function(require,module,exports){
+},{"_process":4,"cliui":18,"decamelize":27,"string-width":35,"window-size":38}],46:[function(require,module,exports){
 // validation-type-stuff, missing params,
 // bad implications, custom checks.
 module.exports = function (yargs, usage, y18n) {
